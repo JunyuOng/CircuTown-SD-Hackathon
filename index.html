@@ -634,6 +634,16 @@ body.demo-active .demo-guide .demo-progress{height:4px!important;margin:0 17px 1
 body.demo-active .demo-guide .demo-progress i{border-radius:99px!important}
 @media(max-width:900px){body.demo-active .demo-guide h2{font-size:17px!important}body.demo-active .demo-guide p{font-size:13.5px!important}body.demo-active .demo-guide .demo-progress{margin:0 12px 8px!important}}
 </style>
+<style id="ct-demo-arrow-style">
+/* Minimal presentation hint: anchor to the actual Guided demo button, not the app. */
+#demoTrigger{position:relative;isolation:isolate}
+#demoTrigger.ct-hint-active::after{content:"↑  Click here for the full guided app demo";position:absolute;left:50%;top:calc(100% + 16px);transform:translateX(-50%);width:205px;white-space:normal;text-align:center;line-height:1.35;padding:10px 12px;border-radius:12px;background:#103b2a;color:#f3fff7;font-size:12px;font-weight:800;box-shadow:0 9px 25px #0003;z-index:260;pointer-events:none;animation:ctDemoHintIn .45s ease both}
+#demoTrigger.ct-hint-active::before{content:"";position:absolute;top:calc(100% + 9px);left:calc(50% - 7px);width:14px;height:14px;background:#103b2a;transform:rotate(45deg);z-index:261;pointer-events:none}
+@keyframes ctDemoHintIn{from{opacity:0;translate:0 7px}to{opacity:1;translate:0 0}}
+body.demo-active #demoTrigger.ct-hint-active::before,body.demo-active #demoTrigger.ct-hint-active::after{display:none}
+@media(max-width:620px){#demoTrigger.ct-hint-active::after{width:168px;font-size:11px;left:auto;right:-30px;transform:none}}
+@media(prefers-reduced-motion:reduce){#demoTrigger.ct-hint-active::after{animation:none}}
+</style>
 </head>
 <body>
 
@@ -1996,4 +2006,12 @@ setInterval(()=>{
 </script>
 
 <div id="demoGuide" class="demo-guide" hidden></div><div id="demoCursor" aria-hidden="true"></div>
+<script id="ct-demo-arrow-script">
+(function(){
+if(new URLSearchParams(location.search).get('demo')==='1')return;
+var btn=document.getElementById('demoTrigger');if(!btn)return;
+btn.classList.add('ct-hint-active');
+btn.addEventListener('click',function(){btn.classList.remove('ct-hint-active');},{once:true});
+})();
+</script>
 </body></html>
