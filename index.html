@@ -2011,9 +2011,9 @@ async function demoShow(selector,ms=2700,side='auto'){
 }
 function guideText(chapter,title,body,selector,side){
  const g=demoPanel();g.hidden=false;
- g.innerHTML=`<div class="demo-top"><span>▶ CIRCUTOWN STORY · ${demoStep+1}/${DEMO_SCENES.length}</span><span>SIMULATED PROTOTYPE</span></div><div class="demo-chapter">${esc(chapter)}</div><h2>${esc(title)}</h2><p>${esc(body)}</p><div class="demo-controls"><button type="button" id="demoPause">${demoPaused?'Resume':'Pause'}</button><button type="button" id="demoSkip">Skip scene →</button><button type="button" id="demoExit">Exit</button></div><div class="demo-progress"><i id="demoCountdownFill" style="width:100%"></i></div>`;
+ g.innerHTML=`<div class="demo-top"><span>▶ CIRCUTOWN STORY · ${demoStep+1}/${DEMO_SCENES.length}</span><span>SIMULATED PROTOTYPE</span></div><div class="demo-chapter">${esc(chapter)}</div><h2>${esc(title)}</h2><p>${esc(body)}</p><div class="demo-controls"><button type="button" id="demoPause">${demoPaused?'Resume':'Pause'}</button><button type="button" id="demoExit">Exit</button></div><div class="demo-progress"><i id="demoCountdownFill" style="width:100%"></i></div>`;
  document.getElementById('demoPause').onclick=()=>{demoPaused=!demoPaused;document.getElementById('demoPause').textContent=demoPaused?'Resume':'Pause';if(!demoPaused)demoResolvePause?.();};
- document.getElementById('demoSkip').onclick=()=>{demoStep=Math.min(DEMO_SCENES.length-1,demoStep+1);};
+
  document.getElementById('demoExit').onclick=stopGuidedDemo;
  demoGuideAnchor = selector ? document.querySelector(selector) : null;
  demoGuidePreferred = side || 'auto';
