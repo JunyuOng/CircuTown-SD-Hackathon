@@ -634,21 +634,6 @@ body.demo-active .demo-guide .demo-progress{height:4px!important;margin:0 17px 1
 body.demo-active .demo-guide .demo-progress i{border-radius:99px!important}
 @media(max-width:900px){body.demo-active .demo-guide h2{font-size:17px!important}body.demo-active .demo-guide p{font-size:13.5px!important}body.demo-active .demo-guide .demo-progress{margin:0 12px 8px!important}}
 </style>
-<style id="circutown-tour-hint-style">
-.ct-tour-hint{position:fixed;z-index:250;max-width:min(330px,calc(100vw - 24px));width:310px;background:#103a29;color:#f5fff8;padding:16px 17px 14px;border-radius:16px;box-shadow:0 12px 38px rgba(0,0,0,.25);border:1px solid #77e5a372;animation:ctHintArrive .45s cubic-bezier(.16,1,.3,1) both;font-family:inherit}
-.ct-tour-hint[hidden]{display:none!important}.ct-tour-hint:before{content:"";position:absolute;top:-8px;left:var(--ct-arrow-left,55%);width:15px;height:15px;transform:rotate(45deg);background:#103a29;border-left:1px solid #77e5a372;border-top:1px solid #77e5a372}
-.ct-tour-hint-kicker{font-size:10px;font-weight:800;letter-spacing:.11em;color:#9ef5bf;margin-bottom:6px}
-.ct-tour-hint strong{display:block;font-size:17px;line-height:1.2;margin-bottom:7px}
-.ct-tour-hint p{font-size:13px;line-height:1.48;margin:0 0 12px;color:#e2f4e9}
-.ct-tour-hint-actions{display:flex;gap:9px;align-items:center}
-.ct-tour-hint-start{border:0;border-radius:9px;background:#98f1b7;color:#103a29;padding:9px 13px;font-weight:800;font:inherit;font-size:12px;cursor:pointer}
-.ct-tour-hint-close{border:0;background:transparent;color:#c7e4d4;padding:8px;font:inherit;font-size:12px;cursor:pointer}
-.ct-tour-hint-spotlight{position:relative;z-index:251!important;box-shadow:0 0 0 4px #9bffc390,0 0 0 9px #9bffc320;animation:ctHintGlow 2s ease-in-out infinite}
-@keyframes ctHintArrive{from{opacity:0;transform:translateY(-10px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
-@keyframes ctHintGlow{50%{box-shadow:0 0 0 5px #9bffc360,0 0 0 13px #9bffc318}}
-@media(max-width:600px){.ct-tour-hint{padding:13px 14px;width:calc(100vw - 24px);max-width:320px}.ct-tour-hint strong{font-size:15px}.ct-tour-hint p{font-size:12px}}
-@media(prefers-reduced-motion:reduce){.ct-tour-hint,.ct-tour-hint-spotlight{animation:none!important}}
-</style>
 </head>
 <body>
 
@@ -2011,39 +1996,4 @@ setInterval(()=>{
 </script>
 
 <div id="demoGuide" class="demo-guide" hidden></div><div id="demoCursor" aria-hidden="true"></div>
-<script id="circutown-tour-hint-script">
-(function(){
-  'use strict';
-  if(new URLSearchParams(location.search).get('demo')==='1')return;
-  const button=document.getElementById('demoTrigger');
-  if(!button)return;
-  const key='circutown-tour-hint-dismissed';
-  try{if(sessionStorage.getItem(key)==='yes')return;}catch(e){}
-  const hint=document.createElement('aside');
-  hint.className='ct-tour-hint';
-  hint.setAttribute('aria-label','Guided demo invitation');
-  hint.innerHTML='<div class="ct-tour-hint-kicker">QUICK START · CIRCUTOWN</div><strong>See the full app in action</strong><p>Click <b>Guided demo</b> above for a complete walkthrough of recycling, points, Precinct Wars, rewards, and CircuShuttle.</p><div class="ct-tour-hint-actions"><button class="ct-tour-hint-start" type="button">▶ Watch full demo</button><button class="ct-tour-hint-close" type="button">Got it</button></div>';
-  document.body.appendChild(hint);
-  function position(){
-    const b=button.getBoundingClientRect();
-    const w=hint.offsetWidth;
-    const x=Math.max(12,Math.min(innerWidth-w-12,b.left+b.width/2-w/2));
-    hint.style.left=x+'px';
-    hint.style.top=Math.min(innerHeight-hint.offsetHeight-12,b.bottom+20)+'px';
-    hint.style.setProperty('--ct-arrow-left',Math.max(16,Math.min(w-30,b.left+b.width/2-x-8))+'px');
-  }
-  function close(){
-    hint.remove();
-    button.classList.remove('ct-tour-hint-spotlight');
-    try{sessionStorage.setItem(key,'yes');}catch(e){}
-    removeEventListener('resize',position);
-  }
-  hint.querySelector('.ct-tour-hint-close').addEventListener('click',close);
-  hint.querySelector('.ct-tour-hint-start').addEventListener('click',()=>{close();button.click();});
-  button.addEventListener('click',close,{once:true});
-  button.classList.add('ct-tour-hint-spotlight');
-  addEventListener('resize',position);
-  position();
-})();
-</script>
 </body></html>
