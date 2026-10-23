@@ -635,14 +635,15 @@ body.demo-active .demo-guide .demo-progress i{border-radius:99px!important}
 @media(max-width:900px){body.demo-active .demo-guide h2{font-size:17px!important}body.demo-active .demo-guide p{font-size:13.5px!important}body.demo-active .demo-guide .demo-progress{margin:0 12px 8px!important}}
 </style>
 <style id="ct-demo-arrow-style">
-/* Minimal presentation hint: anchor to the actual Guided demo button, not the app. */
 #demoTrigger{position:relative;isolation:isolate}
-#demoTrigger.ct-hint-active::after{content:"↑  Click here for the full guided app demo";position:absolute;left:50%;top:calc(100% + 16px);transform:translateX(-50%);width:205px;white-space:normal;text-align:center;line-height:1.35;padding:10px 12px;border-radius:12px;background:#103b2a;color:#f3fff7;font-size:12px;font-weight:800;box-shadow:0 9px 25px #0003;z-index:260;pointer-events:none;animation:ctDemoHintIn .45s ease both}
-#demoTrigger.ct-hint-active::before{content:"";position:absolute;top:calc(100% + 9px);left:calc(50% - 7px);width:14px;height:14px;background:#103b2a;transform:rotate(45deg);z-index:261;pointer-events:none}
-@keyframes ctDemoHintIn{from{opacity:0;translate:0 7px}to{opacity:1;translate:0 0}}
+#demoTrigger.ct-hint-active{box-shadow:0 0 0 4px #92efb8,0 0 0 9px #92efb847!important;animation:ctTriggerPulse 2.2s ease-in-out infinite}
+#demoTrigger.ct-hint-active::after{content:"↑  CLICK HERE TO WATCH THE FULL GUIDED DEMO";position:absolute;left:50%;top:calc(100% + 19px);transform:translateX(-50%);width:270px;max-width:calc(100vw - 30px);white-space:normal;text-align:center;line-height:1.35;padding:15px 18px;border-radius:15px;background:#103b2a;color:#fff;font-size:17px;font-weight:900;letter-spacing:.015em;box-shadow:0 12px 35px #0005;z-index:260;pointer-events:none;animation:ctDemoHintIn .5s ease both}
+#demoTrigger.ct-hint-active::before{content:"";position:absolute;top:calc(100% + 10px);left:calc(50% - 10px);width:20px;height:20px;background:#103b2a;transform:rotate(45deg);z-index:261;pointer-events:none}
+@keyframes ctDemoHintIn{from{opacity:0;translate:0 9px}to{opacity:1;translate:0 0}}
+@keyframes ctTriggerPulse{50%{box-shadow:0 0 0 5px #92efb8,0 0 0 14px #92efb829}}
 body.demo-active #demoTrigger.ct-hint-active::before,body.demo-active #demoTrigger.ct-hint-active::after{display:none}
-@media(max-width:620px){#demoTrigger.ct-hint-active::after{width:168px;font-size:11px;left:auto;right:-30px;transform:none}}
-@media(prefers-reduced-motion:reduce){#demoTrigger.ct-hint-active::after{animation:none}}
+@media(max-width:620px){#demoTrigger.ct-hint-active::after{width:200px;font-size:14px;padding:12px 13px;left:auto;right:-28px;transform:none}}
+@media(prefers-reduced-motion:reduce){#demoTrigger.ct-hint-active,#demoTrigger.ct-hint-active::after{animation:none}}
 </style>
 </head>
 <body>
