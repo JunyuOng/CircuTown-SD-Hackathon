@@ -998,3 +998,1002 @@ const Bin={
     if(token!==bin.token)return {ok:false,reason:'QR code expired. Please scan again.'};
     bin.status='ready';bin.session={first:state.user.first,items:[]};
     renderKiosk();Net.publish({type:'linked'});
+    return {ok:true};
+  },
+  drop(key){
+    if(bin.status!=='ready')return;
+    const it=ITEMS[key];
+    const g=Math.max(2,Math.round(it.base*(1+(Math.random()*2-1)*it.spread)));
+    const conf=it.reject?rint(82,94):rint(91,99);
+    bin.status='weighing';bin.cur={key,g};
+    renderKiosk();Net.publish({type:'weigh',g:0});
+    let i=0;const steps=14;
+    const iv=every(()=>{
+      i++;
+      const e=1-Math.pow(1-i/steps,3);
+      const val=i>=steps?g:Math.max(0,Math.round(g*e*(1+(Math.random()-.5)*.06)));
+      const n=$('#kW');if(n)n.textContent=val;
+      Net.publish({type:'weigh',g:val});
+      if(i>=steps){
+        clearInterval(iv);intervals.delete(iv);
+        later(()=>{
+          bin.status='identifying';renderKiosk();Net.publish({type:'identifying',g:g});
+          later(()=>{
+            const ok=!it.reject;
+            const entry={id:uid(),ok:ok,key:key,name:it.name,mat:it.mat,matLabel:ok?MATERIALS[it.mat].label:'',g:g,conf:conf,
+              pts:ok?round1(g/1000*MATERIALS[it.mat].rate*bin.boost):0,boost:bin.boost,ts:Date.now(),reason:it.reason||''};
+            if(ok)bin.session.items.push(entry);
+            bin.status='result';bin.last=entry;renderKiosk();
+            Net.publish({type:'result',entry:entry});
+            later(()=>{bin.status='ready';renderKiosk();Net.publish({type:'ready'});},2000);
+          },1200);
+        },200);
+      }
+    },65);
+  },
+  end(sum){
+    bin.status='ended';bin.ended=sum;renderKiosk();
+    later(()=>{bin.status='idle';bin.session=null;bin.cur=null;bin.last=null;newToken();renderKiosk();Net.publish({type:'idle'});},4000);
+  }
+};
+
+/* ================= app: chrome ================= */
+const screen=$('#screen'),toasts=$('#toasts'),sheetHost=$('#sheetHost');
+const NAV=[
+  {t:'home',label:'Home',icon:'home'},{t:'rewards',label:'Rewards',icon:'gift'},
+  {t:'recycle',label:'Recycle',icon:'refresh',fab:true},{t:'precinct',label:'Community',icon:'users'},{t:'me',label:'Me',icon:'user'}
+];
+function buildNav(){
+  $('#nav').innerHTML=NAV.map(n=>n.fab
+    ?`<button type="button" class="fab" data-act="tab" data-tab="${n.t}" data-nav="${n.t}" aria-label="Recycle"><span class="fab-ico">${ic(n.icon,26,2.4)}<i class="fab-dot" id="fabDot" hidden></i></span><span>${n.label}</span></button>`
+    :`<button type="button" data-act="tab" data-tab="${n.t}" data-nav="${n.t}">${ic(n.icon,22)}<span>${n.label}</span></button>`).join('');
+}
+const onSessionView=()=>ui.tab==='recycle'&&ui.recycle==='session';
+function updateChrome(){
+  document.querySelectorAll('#nav [data-nav]').forEach(b=>{
+    if(b.dataset.nav===ui.tab)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');
+  });
+  const active=!!appSession;
+  const dot=$('#fabDot');if(dot)dot.hidden=!active;
+  const pill=$('#livePill');
+  pill.hidden=!(active&&!onSessionView());
+  if(active){const t=sessionTotals(appSession.items);$('#livePillTxt').textContent=`Live Circular Bin session · ${t.n} item${t.n===1?'':'s'}`;}
+}
+function toast(msg,type){
+  const t=document.createElement('div');
+  t.className='toast'+(type==='err'?' err':'');
+  t.innerHTML=(type==='err'?ic('x',16,3):ic('check',16,3))+`<span>${esc(msg)}</span>`;
+  toasts.appendChild(t);
+  while(toasts.children.length>3)toasts.firstChild.remove();
+  setTimeout(()=>{t.classList.add('out');setTimeout(()=>t.remove(),320);},2700);
+}
+function openSheet(html){sheetHost.innerHTML=`<div class="backdrop" data-act="close-sheet"></div><div class="sheet" role="dialog" aria-modal="true"><div class="sheet-handle"></div>${html}</div>`;}
+function closeSheet(){sheetHost.innerHTML='';}
+function countUp(el,to,fmt,dur){
+  if(!el)return;
+  const t0=performance.now();
+  const step=now=>{
+    const p=Math.min(1,(now-t0)/dur),e=1-Math.pow(1-p,3);
+    if(!el.isConnected)return;
+    el.textContent=fmt(p<1?to*e:to);
+    if(p<1)requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function burst(host){
+  if(!host)return;
+  const colors=['#f2b134','#3ecf8e','#5b8bdc','#8667cf','#e5473d'];
+  let h='';
+  for(let i=0;i<26;i++){
+    h+=`<i style="left:${rint(2,98)}%;background:${colors[i%colors.length]};animation-duration:${(1.6+Math.random()*1.4).toFixed(2)}s;animation-delay:${(Math.random()*.5).toFixed(2)}s"></i>`;
+  }
+  host.innerHTML=h;
+}
+
+/* ================= app: screens ================= */
+function histRow(h){
+  const neg=h.pts<0;
+  return `<li class="row"><div class="row-ico">${ic(h.type==='recycle'?'refresh':h.type==='event'?'users':'gift',18)}</div>
+    <div class="row-main"><b>${esc(h.title)}</b><span>${relDay(h.ts)} · ${esc(h.sub)}</span></div>
+    <div class="row-end ${neg?'neg':'pos'}">${neg?'−':'+'}${fmtPts(Math.abs(h.pts))}</div></li>`;
+}
+function homeScreen(){
+  const lv=levelInfo(state.lifetime),tot=totals(),rk=rankInfo(),mi=monthInfo();
+  const active=state.vouchers.filter(v=>vStatus(v)==='active').length;
+  const bar=`<div class="stack">${MAT_KEYS.map(k=>`<i style="flex:${Math.max(state.mats[k].kg,0.01)};background:${MATERIALS[k].color}"></i>`).join('')}</div>`;
+  const legend=`<div class="legend">${MAT_KEYS.map(k=>{
+    const pct=tot.kg?Math.round(state.mats[k].kg/tot.kg*100):0;
+    return `<div><span class="mdot" style="background:${MATERIALS[k].color}"></span>${MATERIALS[k].label}<b class="num">${fmtKg(state.mats[k].kg,1)} kg</b><em class="num">${pct}%</em></div>`;}).join('')}</div>`;
+  return `<div class="pad">
+    <div class="hello"><div><p class="eyebrow">${greeting()}</p><h1>${esc(state.user.first)}</h1></div>
+      <button type="button" class="avatar" data-act="tab" data-tab="me" aria-label="Open profile">${state.user.initials}</button></div>
+    <section class="hero" aria-label="Circular Points balance">
+      <div class="hero-top"><span class="pill-glass">${ic('leaf',14)} ${lv.name}</span><span>${esc(precinctName())}</span></div>
+      <p class="hero-label">Circular Points balance</p>
+      <p class="hero-num num">${fmtPts(state.balance)}</p>
+      <div class="lvl"><div class="bar"><i style="width:${lv.pct.toFixed(1)}%"></i></div>
+        <span>${lv.next?`${fmtPts(lv.toNext)} pts to ${lv.next.name}`:'Top level reached'}</span></div>
+      <div class="hero-actions"><button type="button" class="btn btn-accent" data-act="tab" data-tab="recycle">${ic('refresh',18,2.4)} Recycle now</button>
+        <button type="button" class="btn btn-glass" data-act="tab" data-tab="rewards">Redeem</button></div>
+    </section>
+    <button type="button" class="quick-feature" data-act="open-rides"><span class="qicon">${ic('car',24)}</span><span style="flex:1"><b style="display:block;font-size:15px">Book township shuttle</b><span class="muted">Shared electric trips · pilot concept</span></span>${ic('chevron',20)}</button>
+    <h3 class="sec">Your impact</h3>
+    <div class="grid2">
+      <div class="card stat"><div class="ico">${ic('scale',18)}</div><b class="num">${fmtKg(tot.kg,1)}<small>kg</small></b><span>Waste diverted</span></div>
+      <div class="card stat"><div class="ico">${ic('cloud',18)}</div><b class="num">${fmtKg(tot.co2,1)}<small>kg</small></b><span>CO₂e avoided</span></div>
+      <div class="card stat"><div class="ico">${ic('refresh',18)}</div><b class="num">${fmtInt(tot.count)}</b><span>Items recycled</span></div>
+      <div class="card stat"><div class="ico">${ic('award',18)}</div><b class="num">#${rk.rank}<small>of ${state.precincts.length}</small></b><span>${esc(precinctName())}</span></div>
+    </div>
+    <div class="card"><h3>What you recycle</h3>${bar}${legend}
+      <p class="note" style="margin-top:12px">CO₂e uses indicative recycled-versus-virgin material factors. Prototype figures.</p></div>
+    ${active?`<button type="button" class="card linkrow" data-act="goto-mine"><div class="row-ico">${ic('gift',18)}</div><div class="grow"><b>${active} active voucher${active===1?'':'s'}</b><span>Show the QR at the counter</span></div>${ic('chevron',18)}</button>`:''}
+    <button type="button" class="card linkrow" data-act="tab" data-tab="precinct"><div class="row-ico">${ic('users',18)}</div>
+      <div class="grow"><b>Precinct Wars · ${mi.label}</b><span>${esc(precinctName())} is #${rk.rank}. ${rk.text}. ${mi.txt}.</span></div>${ic('chevron',18)}</button>
+    <div class="card"><h3>Recent activity</h3><ul class="rows" style="margin-top:6px">${state.history.slice(0,3).map(histRow).join('')}</ul></div>
+  </div>`;
+}
+
+/* ---- recycle ---- */
+function scanScreen(){
+  const scanning=ui.recycle==='scanning';
+  return `<div class="pad">
+    <div><h1>Recycle</h1><p class="sub" style="margin-top:6px">Scan the QR on a Circular Bin to start. It weighs and identifies every item for you.</p></div>
+    <div class="vf${scanning?' scanning':''}">
+      <div class="corners"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div>
+      ${scanning?'<div class="scanline"></div>':''}
+      <div class="vf-msg">${ic('qr',44,1.6)}<span>${scanning?'Looking for a Circular Bin QR code…':'Point your camera at the QR on the Circular Bin screen'}</span></div>
+    </div>
+    <button type="button" class="btn btn-primary btn-block" data-act="scan" ${scanning?'disabled':''}>${scanning?'Scanning…':'Scan Circular Bin QR'}</button>
+    <p class="note" style="text-align:center;margin-top:-6px">Prototype: tapping Scan reads the QR shown on the Circular Bin simulator.</p>
+    <div class="steps">
+      <div class="step"><div class="ico">${ic('qr',16)}</div><b>1. Scan</b>Link the bin to your account</div>
+      <div class="step"><div class="ico">${ic('trash',16)}</div><b>2. Drop</b>One item at a time</div>
+      <div class="step"><div class="ico">${ic('star',16)}</div><b>3. Earn</b>Circular Points in real time</div>
+    </div>
+    <h3 class="sec">Circular Bins near you</h3>
+    <div class="card"><ul class="rows">${NEAR_BINS.map(b=>`<li class="row"><div class="row-ico">${ic('pin',18)}</div>
+      <div class="row-main"><b>${b.name}</b><span>${b.id} · ${b.dist}</span></div><span class="chip ${b.tone==='ok'?'chip-ok':'chip-warn'}">${b.status}</span></li>`).join('')}</ul></div>
+  </div>`;
+}
+function liveHTML(){
+  const n=appSession.items.filter(i=>i.ok).length;
+  switch(live.stage){
+    case 'weighing':
+      return `<div class="live"><p class="live-tag"><i class="dot"></i> Weighing</p><div class="live-big num"><span id="liveW">${live.w}</span><small>g</small></div><p class="muted">Live from the Circular Bin load cell</p></div>`;
+    case 'identifying':
+      return `<div class="live"><p class="live-tag"><i class="dot"></i> Identifying</p><div class="shimmer-box"></div><p class="muted">Weight locked at <b>${live.w} g</b>. The camera is classifying the item…</p></div>`;
+    case 'accepted':{
+      const e=live.entry;
+      return `<div class="live"><div class="live-res"><div class="live-ico">${itemIcon(e.key,60)}</div><div class="live-info">
+        <span class="chip chip-ok" style="align-self:flex-start">${ic('check',12,3)} Recycled</span><h2>${esc(e.name)}</h2>
+        <span class="chip" style="align-self:flex-start"><span class="mdot" style="background:${MATERIALS[e.mat].color}"></span>${esc(e.matLabel)}</span>
+        <div class="live-stats num"><div><b>${e.g} g</b><span>Weight</span></div><div><b>${e.conf}%</b><span>Match</span></div><div><b class="pos">+${fmtPts(e.pts)}</b><span>Circular Points</span></div></div>
+        ${e.boost>1?`<span class="boost" style="align-self:flex-start">Demo boost ×${e.boost}</span>`:''}</div></div></div>`;}
+    case 'rejected':{
+      const e=live.entry;
+      return `<div class="live bad"><div class="live-res"><div class="live-ico">${itemIcon(e.key,60)}</div><div class="live-info">
+        <span class="chip chip-bad" style="align-self:flex-start">${ic('x',12,3)} Not accepted</span><h2>${esc(e.name)}</h2>
+        <p class="muted">${esc(e.reason)}</p><p class="muted"><b>No points awarded.</b> Take the item back from the platform.</p></div></div></div>`;}
+    default:
+      return `<div class="live"><div class="live-wait"><div class="pulse-ring">${ic('trash',28)}</div>
+        <h3>${n?'Ready for your next item':'Ready for your first item'}</h3>
+        <p class="muted">Place one item at a time on the Circular Bin platform.</p>
+        <button type="button" class="btn btn-ghost btn-sm only-narrow" data-act="openbin">Open Circular Bin simulator</button></div></div>`;
+  }
+}
+function totalsHTML(){
+  const t=sessionTotals(appSession.items);
+  return `<div class="grid3 num"><div class="tot"><b>${t.n}</b><span>Items</span></div><div class="tot"><b>${fmtG(t.g)}</b><span>Weight</span></div><div class="tot"><b class="pos">${fmtPts(t.pts)}</b><span>Circular Points</span></div></div>`;
+}
+function listHTML(){
+  const items=appSession.items;
+  if(!items.length)return '<div class="empty">Items you recycle appear here the moment the bin identifies them.</div>';
+  return `<div class="card"><ul class="rows">${items.map(e=>`<li class="row"><div class="row-ico">${itemIcon(e.key,30)}</div>
+    <div class="row-main"><b>${esc(e.name)}</b><span>${e.g} g · ${e.conf}% match${e.ok?'':' · not accepted'}</span></div>
+    <div class="row-end ${e.ok?'pos':'neg'} num">${e.ok?'+'+fmtPts(e.pts)+(e.boost>1?` <span class="boost">×${e.boost}</span>`:''):'Rejected'}</div></li>`).join('')}</ul></div>`;
+}
+function actionsHTML(){
+  const t=sessionTotals(appSession.items);
+  const idle=live.stage==='waiting';
+  const label=t.n?`Finish and claim ${fmtPts(t.pts)} pts`:'End session';
+  return `<button type="button" class="btn btn-primary btn-block" data-act="finish" ${idle?'':'disabled'}>${label}</button>`;
+}
+function sessionScreen(){
+  return `<div class="pad">
+    <div class="conn"><i class="dot"></i><div>Connected to Circular Bin ${BIN.id}<span>${BIN.name} · live</span></div></div>
+    <div id="sessLive">${liveHTML()}</div>
+    <div id="sessTotals">${totalsHTML()}</div>
+    <h3 class="sec">This session</h3>
+    <div id="sessList">${listHTML()}</div>
+    <div id="sessActions">${actionsHTML()}</div>
+  </div>`;
+}
+function renderSessionParts(){
+  if(!onSessionView()||!appSession)return;
+  const a=$('#sessLive');if(!a)return;
+  a.innerHTML=liveHTML();
+  $('#sessTotals').innerHTML=totalsHTML();
+  $('#sessList').innerHTML=listHTML();
+  $('#sessActions').innerHTML=actionsHTML();
+}
+function summaryScreen(){
+  const s=ui.summary;
+  const mats=Object.keys(s.byMat);
+  return `<div class="pad summary">
+    <div class="confetti" id="confetti" aria-hidden="true"></div>
+    <div class="s-badge">${ic('check',34,3)}</div>
+    <div><h1>Nice work, ${esc(state.user.first)}!</h1><p class="sub" style="margin-top:6px">Session complete. Your points are in your wallet.</p></div>
+    <div class="s-points num"><span id="sPts">0</span><small>Circular Points earned</small></div>
+    ${s.levelUp?`<div class="banner good">${ic('leaf',22)}<div>Level up! You are now a ${esc(s.levelUp)}.</div></div>`:''}
+    ${s.rankUp?`<div class="banner">${ic('trend',22)}<div>${esc(precinctName())} moved ${s.rankFrom===1?'down':'up'} to #${s.rankTo} in Precinct Wars.</div></div>`:''}
+    ${s.rejected?`<div class="banner">${ic('alert',22)}<div>${s.rejected} item${s.rejected===1?' was':'s were'} not accepted and earned no points.</div></div>`:''}
+    <div class="grid3 num"><div class="tot"><b>${fmtG(s.g)}</b><span>Recycled</span></div><div class="tot"><b>${s.n}</b><span>Items</span></div><div class="tot"><b>${fmtKg(s.co2,2)}</b><span>kg CO₂e avoided</span></div></div>
+    <div class="card" style="text-align:left"><h3>By material</h3><ul class="rows" style="margin-top:6px">${mats.map(k=>`<li class="row"><span class="mdot" style="background:${MATERIALS[k].color}"></span>
+      <div class="row-main"><b>${MATERIALS[k].label}</b><span>${s.byMat[k].n} item${s.byMat[k].n===1?'':'s'} · ${fmtG(s.byMat[k].g)}</span></div><div class="row-end pos num">+${fmtPts(s.byMat[k].pts)}</div></li>`).join('')}</ul></div>
+    <p class="muted">New balance <b class="num">${fmtPts(s.balance)}</b> Circular Points</p>
+    <button type="button" class="btn btn-primary btn-block" data-act="summary-done">Back to home</button>
+    <button type="button" class="btn btn-ghost btn-block" data-act="summary-rewards">Browse rewards</button>
+  </div>`;
+}
+function recycleScreen(){
+  if(ui.recycle==='session'&&appSession)return sessionScreen();
+  if(ui.recycle==='summary'&&ui.summary)return summaryScreen();
+  return scanScreen();
+}
+
+/* ---- rewards ---- */
+function voucherCards(){
+  const q=ui.q.trim().toLowerCase();
+  const list=VENDORS.filter(v=>(ui.cat==='All'||v.cat===ui.cat)&&(!q||(v.name+' '+v.offer+' '+v.cat).toLowerCase().includes(q)));
+  if(!list.length)return '<div class="empty">No vouchers match your search.</div>';
+  return list.map(v=>{
+    const afford=state.balance>=v.cost;
+    return `<article class="vc"><div class="vc-top"><div class="logo" style="background:${v.hue}">${monogram(v.name)}</div>
+      <div><h3>${esc(v.name)}</h3><p class="offer">${esc(v.offer)}</p></div></div>
+      <div class="vc-meta"><span>${ic('pin',13)} ${esc(v.where)}</span><span>${ic('clock',13)} ${esc(v.win)}</span></div>
+      <div class="vc-foot"><span class="cost num">${fmtPts(v.cost)}<small>Circular Points</small></span>
+      <button type="button" class="btn btn-sm ${afford?'btn-primary':'btn-ghost'}" data-act="redeem" data-id="${v.id}" ${afford?'':'disabled'}>${afford?'Redeem':'Need '+fmtPts(v.cost-state.balance)+' more'}</button></div></article>`;
+  }).join('');
+}
+function myVouchers(){
+  const list=state.vouchers.slice().sort((a,b)=>b.redeemedAt-a.redeemedAt);
+  if(!list.length)return '<div class="empty">No vouchers yet. Redeem Circular Points in the marketplace.</div>';
+  return list.map(v=>{
+    const ven=vendorById(v.vendorId),st=vStatus(v);
+    const chip=st==='active'?'<span class="chip chip-ok">Active</span>':st==='used'?'<span class="chip">Used</span>':'<span class="chip chip-bad">Expired</span>';
+    return `<article class="vc ${st==='active'?'':'used'}"><div class="vc-top"><div class="logo" style="background:${ven.hue}">${monogram(ven.name)}</div>
+      <div style="flex:1;min-width:0"><h3>${esc(ven.name)}</h3><p class="offer">${esc(ven.offer)}</p></div>${chip}</div>
+      <div class="vc-foot"><span class="muted">${st==='used'?'Used '+fmtDate(v.usedAt):'Valid until '+fmtDate(v.expiresAt)}</span>
+      <button type="button" class="btn btn-sm btn-ghost" data-act="show-voucher" data-id="${v.id}">${st==='active'?'Show QR':'Details'}</button></div></article>`;
+  }).join('');
+}
+function rewardsScreen(){
+  const n=state.vouchers.filter(v=>vStatus(v)==='active').length;
+  return `<div class="pad">
+    <div class="rw-head"><h1>Rewards</h1><span class="bal-chip num">${ic('star',15)} ${fmtPts(state.balance)} pts</span></div>
+    <p class="sub">Spend Circular Points at shoplots right here in the township.</p>
+    <div class="seg" role="group" aria-label="Rewards view" style="align-self:stretch;display:grid;grid-template-columns:1fr 1fr">
+      <button type="button" data-act="rview" data-v="market" class="${ui.rview==='market'?'on':''}">Marketplace</button>
+      <button type="button" data-act="rview" data-v="mine" class="${ui.rview==='mine'?'on':''}">My vouchers (${n})</button></div>
+    ${ui.rview==='market'?`
+      <label class="search" for="q">${ic('search',18)}<input id="q" type="search" placeholder="Search cafes, bakeries, stores" value="${esc(ui.q)}" autocomplete="off"></label>
+      <div class="chips" role="group" aria-label="Category">${CATS.map(c=>`<button type="button" data-act="cat" data-cat="${c}" class="${ui.cat===c?'on':''}">${c}</button>`).join('')}</div>
+      <div class="vlist" id="vlist">${voucherCards()}</div>
+      <p class="note">Sample vendors for the prototype. Points can only be spent at shoplots inside the township.</p>`
+    :`<div class="vlist">${myVouchers()}</div>`}
+  </div>`;
+}
+function redeemSheet(id){
+  const v=vendorById(id);
+  openSheet(`<h2>Redeem this voucher?</h2>
+    <div class="vc-top"><div class="logo" style="background:${v.hue}">${monogram(v.name)}</div><div><h3>${esc(v.name)}</h3><p class="offer">${esc(v.offer)}</p></div></div>
+    <div><div class="kv"><span>Cost</span><b class="num">${fmtPts(v.cost)} pts</b></div><div class="kv"><span>Balance now</span><b class="num">${fmtPts(state.balance)} pts</b></div>
+    <div class="kv"><span>Balance after</span><b class="num">${fmtPts(state.balance-v.cost)} pts</b></div></div>
+    <p class="muted">Valid for 7 days. ${esc(v.win)} at ${esc(v.where)}. Show the QR code to the cashier.</p>
+    <div class="grid2"><button type="button" class="btn btn-ghost" data-act="close-sheet">Cancel</button><button type="button" class="btn btn-primary" data-act="confirm-redeem" data-id="${id}">Confirm</button></div>`);
+}
+function voucherSheet(id){
+  const v=state.vouchers.find(x=>x.id===id);if(!v)return;
+  const ven=vendorById(v.vendorId),st=vStatus(v);
+  openSheet(`<div class="vsheet" style="display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div class="logo" style="background:${ven.hue}">${monogram(ven.name)}</div><h2>${esc(ven.name)}</h2><p class="offer">${esc(ven.offer)}</p></div>
+    ${st==='active'?`<div style="display:flex;justify-content:center"><div class="qrbox" id="vqr"></div></div>`:`<span class="chip ${st==='used'?'':'chip-bad'}" style="align-self:center">${st==='used'?'Used on '+fmtDate(v.usedAt):'Expired on '+fmtDate(v.expiresAt)}</span>`}
+    <p class="code">${esc(v.code)}</p>
+    <div style="text-align:left"><div class="kv"><span>Valid until</span><b>${fmtDate(v.expiresAt)}</b></div><div class="kv"><span>When</span><b>${esc(ven.win)}</b></div><div class="kv"><span>Where</span><b>${esc(ven.where)}</b></div></div>
+    ${st==='active'?`<button type="button" class="btn btn-ghost" data-act="simulate-use" data-id="${id}">Simulate vendor scan (demo)</button>`:''}
+    <button type="button" class="btn btn-primary" data-act="close-sheet">Done</button></div>`);
+  if(st==='active')renderQR($('#vqr'),`circulartown://voucher/${v.code}`,184);
+}
+
+/* ---- precinct ---- */
+function precinctScreen(){
+  const mi=monthInfo(),rk=rankInfo(),s=sortedPrecincts(),max=s[0].score||1;
+  const contrib=state.others.concat([{name:state.user.first+' '+state.user.name.split(' ')[1][0]+'.',pts:state.monthPts,you:true}]).sort((a,b)=>b.pts-a.pts);
+  return `<div class="pad">
+    <div><h1>Precinct Wars</h1><p class="sub" style="margin-top:6px">${mi.label} · ${mi.txt}</p></div>
+    <div class="prize"><div class="ico">${ic('award',22)}</div><div>Greenest Precinct of the month wins a community garden upgrade, sponsored by SDP.</div></div>
+    <div class="card rankcard"><span class="eyebrow">${esc(precinctName())}</span><b class="num">#${rk.rank} of ${s.length}</b>
+      <span class="${rk.lead?'pos':''}" style="font-weight:700">${rk.text}</span></div>
+    <h3 class="sec">Leaderboard</h3>
+    <ol class="board">${s.map((p,i)=>`<li class="${p.id===state.user.precinctId?'me':''}"><span class="rk num">${i+1}</span>
+      <span class="nm">${esc(p.name)}${p.id===state.user.precinctId?'<span class="chip chip-ok">Your precinct</span>':''}</span><span class="sc num">${fmtPts(p.score)}</span>
+      <span class="meter"><i style="width:${(p.score/max*100).toFixed(1)}%"></i></span></li>`).join('')}</ol>
+    <p class="note">Precinct score is the total Circular Points earned by residents this month.</p>
+    <h3 class="sec">Top recyclers in ${esc(precinctName())}</h3>
+    <div class="card"><ul class="rows">${contrib.slice(0,5).map((c,i)=>`<li class="row"><span class="rk num" style="width:22px;font-family:var(--f-display);font-weight:800;color:var(--ink-3)">${i+1}</span>
+      <div class="row-main"><b>${esc(c.name)}${c.you?' <span class="chip chip-ok">You</span>':''}</b></div><div class="row-end num">${fmtPts(c.pts)} pts</div></li>`).join('')}</ul></div>
+  </div>`;
+}
+
+/* ---- community: events (added) ---- */
+const EV_CATS=['Sports','Party','Gathering','Community','Workshop','Other'];
+const EV_ICON={Sports:'award',Party:'star',Gathering:'users',Community:'leaf',Workshop:'tag',Other:'pin'};
+const EV_MIN_JOIN=3,EV_MIN_REPORTS=5,EV_PTS_JOIN=10,EV_PTS_HOST=20;
+function evPts(e){return e.host===meShort()?EV_PTS_HOST:EV_PTS_JOIN;}
+function evCheck(e){
+  if(e.status!=='ended'||e.awarded||e.reports.length<EV_MIN_REPORTS)return;
+  e.status='success';e.awarded=true;
+  if(!e.mine)return;
+  const pts=evPts(e);e.earned=pts;
+  state.balance=round1(state.balance+pts);state.lifetime=round1(state.lifetime+pts);state.monthPts=round1(state.monthPts+pts);
+  const p=state.precincts.find(x=>x.id===state.user.precinctId);p.score=round1(p.score+pts);
+  state.history.unshift({id:uid(),type:'event',ts:Date.now(),title:'Event · '+e.title,sub:e.host===meShort()?'Organiser reward':'Participant reward',pts:pts});
+  toast('Event completed! +'+pts+' Circular Points');
+}
+function evStatusHTML(e){
+  const me=meShort(),n=e.people.length,r=e.reports.length;
+  let h=`<div class="card"><h3>Event rewards</h3><p class="muted" style="margin-top:6px">${EV_PTS_JOIN} Circular Points for every attendee and ${EV_PTS_HOST} for the organiser, once at least ${EV_MIN_REPORTS} attendees report the event as completed. An event needs ${EV_MIN_JOIN}+ people to be finished.</p></div>`;
+  if(e.status==='open'){
+    if(e.mine){
+      const ok=n>=EV_MIN_JOIN;
+      h+=`<button type="button" class="btn btn-ghost btn-block" data-act="ev-finish" data-id="${e.id}" ${ok?'':'disabled'}>${e.host===me?'Finish event':'Event finished (demo)'}</button>${ok?'':`<p class="note">Only ${n} joined. At least ${EV_MIN_JOIN} people must join before the event can be finished.</p>`}`;
+    }
+    return h;
+  }
+  const pct=Math.min(100,r/EV_MIN_REPORTS*100);
+  h+=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><h3 class="num">${r} of ${EV_MIN_REPORTS} reports</h3><span class="muted">${e.status==='success'?'Completed':'Awaiting reports'}</span></div><div class="bar on-card" style="margin-top:10px"><i style="width:${pct}%"></i></div></div>`;
+  if(e.status==='success'){
+    h+=`<div class="banner good">${ic('check',22)}<div>Event completed.<span style="display:block;font-weight:600;font-size:13px">${e.mine?'You earned +'+e.earned+' Circular Points.':'Attendees have been rewarded.'}</span></div></div>`;
+    return h;
+  }
+  if(n<EV_MIN_REPORTS)h+=`<div class="banner">${ic('alert',22)}<div>Only ${n} attended, so this event can't reach ${EV_MIN_REPORTS} reports and earns no points.</div></div>`;
+  if(e.mine){
+    if(e.reports.includes(me))h+=`<span class="chip chip-ok" style="align-self:flex-start">${ic('check',12,3)} You reported this event</span>`;
+    else h+=`<button type="button" class="btn btn-primary btn-block" data-act="ev-report" data-id="${e.id}">Report event completed</button>`;
+    if(e.people.some(p=>p!==me&&!e.reports.includes(p)))h+=`<button type="button" class="btn btn-ghost btn-block" data-act="ev-simreport" data-id="${e.id}">Simulate another attendee reporting (demo)</button>`;
+  }
+  return h;
+}
+const meShort=()=>state.user.first+' '+state.user.name.split(' ')[1][0]+'.';
+function makeEvents(){
+  const d=new Date();d.setHours(14,0,0,0);
+  if(d.getTime()<Date.now())d.setDate(d.getDate()+1);
+  return [{id:'ev-pickleball',title:'Pickleball at Court 2',cat:'Sports',where:'Pickleball Court 2',when:d.getTime(),
+    host:'Farid K.',cap:8,details:'Friendly doubles for all levels. Paddles and balls are provided, just bring water and court shoes. We rotate partners every game.',
+    people:['Farid K.','Mei Ling T.','Daniel S.','Priya N.','Hazim A.'],rides:1,mine:false,ride:false,status:'open',reports:[]}];
+}
+const evs=()=>state.events||(state.events=makeEvents());
+const evById=id=>evs().find(e=>e.id===id);
+function commHead(){
+  const v=ui.cview||'wars';
+  return `<h1>Community</h1>
+    <div class="seg" role="group" aria-label="Community view" style="align-self:stretch;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))">
+      <button type="button" data-act="cview" data-v="wars" class="${v==='wars'?'on':''}">Precinct Wars</button>
+      <button type="button" data-act="cview" data-v="events" class="${v==='events'?'on':''}">Events</button>
+      <button type="button" data-act="cview" data-v="rides" class="${v==='rides'?'on':''}">Shuttle</button></div>`;
+}
+function evMeta(e){
+  if(!e.when&&!e.where)return `<span>${ic('clock',13)} Time and place shared by the host</span>`;
+  return `${e.when?`<span>${ic('clock',13)} ${relDay(e.when)}</span>`:''}${e.where?`<span>${ic('pin',13)} ${esc(e.where)}</span>`:''}`;
+}
+function eventCard(e){
+  const n=e.people.length,full=n>=e.cap;
+  return `<button type="button" class="card evcard" data-act="open-event" data-id="${e.id}">
+    <div class="vc-top"><div class="logo" style="background:var(--brand)">${ic(EV_ICON[e.cat]||'pin',22)}</div>
+      <div style="flex:1;min-width:0"><h3>${esc(e.title)}</h3><p class="offer">${esc(e.cat)}</p></div>
+      ${e.status==='success'?'<span class="chip chip-ok">Completed</span>':e.status==='ended'?'<span class="chip chip-warn">Ended</span>':e.mine?'<span class="chip chip-ok">Going</span>':full?'<span class="chip chip-bad">Full</span>':''}</div>
+    <div class="vc-meta">${evMeta(e)}</div>
+    <div class="bar on-card"><i style="width:${Math.min(100,n/e.cap*100).toFixed(0)}%"></i></div>
+    <div class="ev-count num"><span><b>${n}</b> of ${e.cap} joined</span><span>${full?'No spots left':(e.cap-n)+' spot'+(e.cap-n===1?'':'s')+' left'}</span></div>
+  </button>`;
+}
+function eventsScreen(){
+  const list=evs();
+  return `<div class="pad">${commHead()}
+    <p class="sub">Join something happening nearby, or start your own.</p>
+    <button type="button" class="btn btn-primary btn-block" data-act="ev-create">${ic('users',18,2.4)} Create event</button>
+    <h3 class="sec">Available events</h3>
+    <div class="vlist">${list.length?list.map(eventCard).join(''):'<div class="empty">No events yet. Be the first to create one.</div>'}</div>
+  </div>`;
+}
+function eventDetail(e){
+  const n=e.people.length,left=e.cap-n,full=left<=0;
+  const mine=meShort();
+  const ppl=e.people.map(p=>`<li class="row"><div class="avatar">${monogram(p)}</div>
+    <div class="row-main"><b>${esc(p)}${p===mine&&e.mine?' <span class="chip chip-ok">You</span>':''}</b></div>
+    ${p===e.host?'<span class="chip chip-warn">Host</span>':''}</li>`).join('');
+  return `<div class="pad">
+    <button type="button" class="backbtn" data-act="ev-back"><span class="flip">${ic('chevron',18)}</span> Events</button>
+    <div class="vc-top"><div class="logo" style="background:var(--brand)">${ic(EV_ICON[e.cat]||'pin',22)}</div>
+      <div style="flex:1;min-width:0"><h2>${esc(e.title)}</h2><span class="chip" style="margin-top:4px">${esc(e.cat)}</span></div></div>
+    <div class="vc-meta">${evMeta(e)}<span>${ic('user',13)} Hosted by ${esc(e.host)}</span></div>
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><h3 class="num">${n} of ${e.cap} joined</h3>
+      <span class="muted">${full?'Event full':left+' spot'+(left===1?'':'s')+' left'}</span></div>
+      <div class="bar on-card" style="margin-top:10px"><i style="width:${Math.min(100,n/e.cap*100).toFixed(0)}%"></i></div>
+      ${e.rides?`<p class="muted" style="margin-top:10px">${ic('arrow',13)} ${e.rides} ${e.rides===1?'person needs':'people need'} a ride</p>`:''}</div>
+    <div><h3 class="sec" style="margin-bottom:6px">Details</h3><p style="white-space:pre-wrap">${esc(e.details)}</p></div>
+    ${e.mine?`<div class="banner good">${ic('check',22)}<div>You're going.<span style="display:block;font-weight:600;font-size:13px">${e.ride?'Transport requested. The host will arrange a ride.':'You are making your own way there.'}</span></div></div>
+      ${e.status==='open'?`<button type="button" class="btn btn-ghost btn-block" data-act="ev-join" data-id="${e.id}" data-change="1">Change transport</button>
+      <button type="button" class="btn btn-ghost btn-block" data-act="ev-leave" data-id="${e.id}">Leave event</button>`:''}`
+    :`<button type="button" class="btn btn-primary btn-block" data-act="ev-join" data-id="${e.id}" ${full||e.status!=='open'?'disabled':''}>${e.status!=='open'?'Event ended':full?'Event full':'Join event'}</button>`}
+    ${evStatusHTML(e)}
+    <h3 class="sec">Who's going</h3>
+    <div class="card people"><ul class="rows">${ppl}</ul></div>
+  </div>`;
+}
+function createEventScreen(){
+  const f=ui.evForm||(ui.evForm={cat:'',name:'',details:'',cap:''});
+  return `<div class="pad">
+    <button type="button" class="backbtn" data-act="ev-back"><span class="flip">${ic('chevron',18)}</span> Events</button>
+    <div><h1>Create event</h1><p class="sub" style="margin-top:6px">Tell neighbours what you are planning.</p></div>
+    <div class="field"><label for="evCat">Event type</label>
+      <select id="evCat"><option value="" ${f.cat?'':'selected'} disabled>Choose a type</option>${EV_CATS.map(c=>`<option value="${c}" ${f.cat===c?'selected':''}>${c}</option>`).join('')}</select></div>
+    <div class="field"><label for="evName">Event name</label>
+      <input id="evName" type="text" maxlength="60" placeholder="e.g. Sunday badminton" value="${esc(f.name)}" autocomplete="off"></div>
+    <div class="field"><label for="evDetails">Details</label>
+      <textarea id="evDetails" maxlength="400" placeholder="What is it, who is it for, what should people bring?">${esc(f.details)}</textarea></div>
+    <div class="field"><label for="evCap">How many people is it open to?</label>
+      <input id="evCap" type="number" inputmode="numeric" min="2" max="500" placeholder="e.g. 10" value="${esc(f.cap)}">
+      <span class="fhint">Including you, the host.</span></div>
+    <p class="note">Hosts earn ${EV_PTS_HOST} points and attendees ${EV_PTS_JOIN} once ${EV_MIN_REPORTS} attendees report the event as completed. At least ${EV_MIN_JOIN} people must join for it to count.</p>
+    <button type="button" class="btn btn-primary btn-block" id="evSubmit" data-act="ev-submit" ${evFormValid()?'':'disabled'}>Create event</button>
+  </div>`;
+}
+function evFormValid(){
+  const f=ui.evForm;if(!f)return false;
+  const c=parseInt(f.cap,10);
+  return !!(f.cat&&f.name.trim()&&f.details.trim()&&c>=2&&c<=500);
+}
+function transportSheet(id,changing){
+  const e=evById(id);
+  openSheet(`<h2>${changing?'Update your transport':'Join this event?'}</h2>
+    <div class="vc-top"><div class="logo" style="background:var(--brand)">${ic(EV_ICON[e.cat]||'pin',22)}</div><div><h3>${esc(e.title)}</h3><p class="offer">${e.when?relDay(e.when):esc(e.cat)}</p></div></div>
+    <h3>Do you need transport?</h3>
+    <button type="button" class="optbtn ${changing&&e.ride?'on':''}" data-act="ev-confirm" data-id="${id}" data-ride="1">${ic('arrow',20)}<div>Yes, I need a ride<span>The host will be told so they can arrange one</span></div></button>
+    <button type="button" class="optbtn ${changing&&!e.ride?'on':''}" data-act="ev-confirm" data-id="${id}" data-ride="0">${ic('check',20)}<div>No, I will get there myself<span>You are all set</span></div></button>
+    <button type="button" class="btn btn-ghost" data-act="close-sheet">Cancel</button>`);
+}
+function communityScreen(){
+  if((ui.cview||'wars')==='rides')return ridesScreen();
+  if(ui.evCreate)return createEventScreen();
+  if((ui.cview||'wars')==='events'){
+    const e=ui.ev&&evById(ui.ev);
+    return e?eventDetail(e):eventsScreen();
+  }
+  return precinctScreen().replace('<div class="pad">','<div class="pad">'+commHead());
+}
+
+
+/* ---- CircuRide: last-mile community mobility demo ---- */
+const RIDE_STOPS=['Elmina Valley 1 Park Hub','Elmina Valley 3 Clubhouse','Elmina Central Park','Elmina Lakeside','Kwasa Sentral MRT','Kwasa Damansara MRT','Elmina Commercial Hub'];
+const rides=()=>state.rides||(state.rides=[
+ {id:'ride-1',driver:'Farid K.',from:'Elmina Valley 1 Park Hub',to:'Kwasa Sentral MRT',time:'07:45',seats:3,requests:[],mine:false,notes:'Morning weekday commute · meet at park entrance'},
+ {id:'ride-2',driver:'Mei Ling T.',from:'Elmina Valley 3 Clubhouse',to:'Kwasa Damansara MRT',time:'08:15',seats:2,requests:[],mine:false,notes:'Passing through the central township pickup hub'},
+ {id:'ride-3',driver:'Daniel S.',from:'Elmina Central Park',to:'Elmina Commercial Hub',time:'16:30',seats:3,requests:[],mine:false,notes:'Afternoon trip to shops and cafes'}
+]);
+const rideOptions=(selected,placeholder)=>`<option value="">${placeholder}</option>`+RIDE_STOPS.map(x=>`<option value="${esc(x)}" ${selected===x?'selected':''}>${esc(x)}</option>`).join('');
+function rideCard(r){
+ const booked=r.requests.includes('me'),left=r.seats-r.requests.length;
+ return `<article class="card ride-result" style="display:flex;flex-direction:column;gap:12px">
+   <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span class="chip chip-ok">${ic('clock',13)} ${esc(r.time)} · sample trip</span><span class="chip">${left} seat${left===1?'':'s'} left</span></div>
+   <div style="display:flex;gap:12px;align-items:center"><div class="avatar">${monogram(r.driver)}</div><div style="flex:1"><b>${esc(r.driver)}</b><p class="muted">Township carpool · resident profile (demo)</p></div></div>
+   <div class="ride-journey"><div><i class="ride-mark"></i><b>${esc(r.from)}</b></div><div><i class="ride-mark destination"></i><b>${esc(r.to)}</b></div></div>
+   <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="muted">${r.mine?'Your shared commute':booked?'Seat requested':'No fare · points after verified trip'}</span><button type="button" class="btn ${booked?'btn-ghost':'btn-primary'} btn-sm" data-act="ride-detail" data-id="${esc(r.id)}">${r.mine?'Manage':booked?'View trip':'View ride'} ${ic('arrow',15)}</button></div>
+ </article>`;
+}
+function rideDetails(id){
+ const r=rides().find(x=>x.id===id);if(!r)return;
+ const booked=r.requests.includes('me'),left=r.seats-r.requests.length,complete=!!r.completed;
+ openSheet(`<div style="display:flex;justify-content:space-between;align-items:center"><span class="chip chip-ok">CircuRide · prototype</span><button class="iconbtn" type="button" data-act="close-sheet" aria-label="Close">${ic('x',18)}</button></div>
+ <h2>${esc(r.to)}</h2><p class="muted">${esc(r.from)} · ${esc(r.time)} · ${esc(r.driver)}</p>
+ <div class="card" style="display:flex;flex-direction:column;gap:9px"><div class="kv"><span>Available seats</span><b>${left}</b></div><div class="kv"><span>Contribution model</span><b>No fare (pilot)</b></div><div class="kv"><span>CircuPoints</span><b>${r.mine?'15 for driver':'5 for passenger'} after trip</b></div><p class="note">These are proposed pilot incentives, not confirmed financial or emissions savings.</p></div>
+ <div class="banner good">${ic('leaf',18)}<div>Share an existing journey, rather than creating another car trip. Pickup is at a public township hub.</div></div>
+ ${complete?`<div class="banner good">${ic('check',18)}<div>Sample journey marked complete.</div></div>`:
+ r.mine?`<button type="button" class="btn btn-primary btn-block" data-act="ride-complete" data-id="${esc(r.id)}" ${r.requests.length?'':'disabled'}>Simulate verified shared journey</button><button type="button" class="btn btn-ghost btn-block" data-act="ride-cancel" data-id="${esc(r.id)}">Remove offered ride</button>`:
+ booked?`<button type="button" class="btn btn-primary btn-block" data-act="ride-complete" data-id="${esc(r.id)}">Simulate verified trip completed</button><button type="button" class="btn btn-ghost btn-block" data-act="ride-request" data-id="${esc(r.id)}">Cancel request</button>`:
+ `<button type="button" class="btn btn-primary btn-block" data-act="ride-request" data-id="${esc(r.id)}" ${left?'':'disabled'}>${left?'Request this seat':'No seats available'}</button>`}
+ <button type="button" class="btn btn-ghost btn-block" data-act="ride-sos">${ic('alert',17)} Safety & SOS</button>
+ <p class="note">Sample resident and booking. A real service would require verified drivers, trip-sharing, consent, insurance and appropriate licensing.</p>`);
+}
+function ridesScreen(){
+ const v=ui.shuttleView||'book', b=state.shuttleBooking, from=ui.shuttleFrom||'Elmina Valley 1 Park Hub',dest=ui.shuttleDest||'Elmina Central Park',n=ui.shuttleCount||1;
+ const stops=['Elmina Valley 1 Park Hub','Elmina Valley 3 Clubhouse','Elmina Central Park','Elmina Commercial Hub','Elmina Gardens Community Centre'];
+ const options=(val)=>stops.map(x=>`<option value="${esc(x)}" ${x===val?'selected':''}>${esc(x)}</option>`).join('');
+ return `<div class="pad">
+ <button type="button" class="backbtn" data-act="ride-back"><span class="flip">${ic('chevron',18)}</span> Community</button>
+ <div class="shuttle-hero"><span class="pill-glass" style="align-self:flex-start">${ic('car',15)} CIRCUSHUTTLE · PILOT CONCEPT</span><h1>Where to?</h1><p>Shared electric rides between your township's main hubs. No driver matching needed.</p></div>
+ <div class="seg" style="display:grid;grid-template-columns:1fr 1fr"><button type="button" data-act="shuttle-view" data-v="book" class="${v==='book'?'on':''}">Book a ride</button><button type="button" data-act="shuttle-view" data-v="mine" class="${v==='mine'?'on':''}">My trip</button></div>
+ ${v==='book'?`<div class="card" style="display:flex;flex-direction:column;gap:13px">
+ <div class="field"><label for="shuttleFrom">Pick up at</label><select id="shuttleFrom">${options(from)}</select></div>
+ <div class="field"><label for="shuttleDest">Where to?</label><select id="shuttleDest">${options(dest)}</select></div>
+ <div class="field"><label for="shuttleCount">Passengers</label><select id="shuttleCount">${[1,2,3,4].map(i=>`<option value="${i}" ${i===n?'selected':''}>${i} passenger${i>1?'s':''}</option>`).join('')}</select></div>
+ <div style="display:flex;justify-content:space-between;align-items:center"><span class="muted">Suggested pilot fare</span><b style="color:var(--brand)">Free · simulated</b></div>
+ <button type="button" class="btn btn-primary btn-block" data-act="shuttle-find" ${from===dest?'disabled':''}>${ic('search',18)} Find shuttle</button></div>
+ ${ui.shuttleMatch?`<div class="shuttle-trip"><span class="chip chip-ok" style="align-self:flex-start">Sample shuttle found · 4 min pickup ETA</span><h3>Electric township shuttle · CS-01</h3><div class="shuttle-stop"><span class="dot-stop"></span><span>${esc(from)}</span></div><div class="shuttle-stop"><span class="dot-stop end"></span><span>${esc(dest)}</span></div><p class="muted">${n} seat${n>1?'s':''} requested · Pickup and route are illustrative</p><button class="btn btn-primary btn-block" type="button" data-act="shuttle-confirm">Confirm sample booking</button></div>`:''}`:
+ b?`<div class="shuttle-trip"><span class="chip chip-ok" style="align-self:flex-start" id="shuttleStage">Shuttle assigned · simulated</span><h2>Your shuttle is on the way</h2>
+ <div class="track-map" role="img" aria-label="Illustrative schematic of shuttle approaching pickup point"><svg viewBox="0 0 340 187" preserveAspectRatio="none"><path d="M40 150 C105 146 115 122 162 103 S251 55 298 40" fill="none" stroke="#fefefe" stroke-width="20" stroke-linecap="round"/><path d="M40 150 C105 146 115 122 162 103 S251 55 298 40" fill="none" stroke="#278d65" stroke-width="5" stroke-dasharray="9 9" stroke-linecap="round"/><circle cx="298" cy="40" r="11" fill="#eaad36" stroke="white" stroke-width="4"/><text x="205" y="24" fill="#164832" font-size="12" font-weight="800">Pickup hub</text></svg><div class="track-marker" id="shuttleMarker" style="--progress:0">${ic('car',22)}</div></div>
+ <div class="track-eta"><div><span class="muted">Pickup ETA · demo</span><strong id="shuttleETA">4 min</strong></div><div><span class="muted">Vehicle</span><strong>CS-01</strong></div></div>
+ <div class="shuttle-stop"><span class="dot-stop"></span><span>${esc(b.from)}</span></div><div class="shuttle-stop"><span class="dot-stop end"></span><span>${esc(b.to)}</span></div>
+ <div class="kv"><span>Passengers</span><b>${b.count}</b></div><div class="kv"><span>Booking code</span><b>${esc(b.code)}</b></div>
+ <p class="note">Animated schematic and accelerated ETA are sample data, not live GPS or actual vehicle dispatch.</p>
+ <button type="button" class="btn btn-ghost btn-block" data-act="shuttle-safety">${ic('alert',17)} Safety & SOS</button><button type="button" class="btn btn-ghost btn-block" data-act="shuttle-cancel">Cancel sample booking</button></div>`:`<div class="empty">No shuttle booked yet. Choose Book a ride to make a sample booking.</div>`}
+ <button type="button" class="card linkrow" data-act="shuttle-safety"><div class="row-ico">${ic('alert',18)}</div><div class="grow"><b>Safety & SOS</b><span>Emergency guidance and proposed trip safeguards</span></div>${ic('chevron',18)}</button>
+ <p class="note">Concept simulation: no real-time fleet, route availability, prices, GPS or emergency dispatch. The operating model, vehicles, accessibility and legal permissions must be validated.</p>
+ </div>`;
+}
+
+/* ---- me ---- */
+function meScreen(){
+  const lv=levelInfo(state.lifetime);
+  return `<div class="pad">
+    <div class="hello" style="justify-content:flex-start;gap:14px"><div class="avatar" style="width:60px;height:60px;font-size:20px">${state.user.initials}</div>
+      <div><h1 style="font-size:24px">${esc(state.user.name)}</h1><p class="sub">${esc(precinctName())} · since ${esc(state.user.since)}</p></div></div>
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><h3>${lv.name}</h3><span class="muted num">${fmtPts(state.lifetime)} pts earned in total</span></div>
+      <div class="bar on-card" style="margin:10px 0 6px"><i style="width:${lv.pct.toFixed(1)}%"></i></div>
+      <p class="muted">${lv.next?`${fmtPts(lv.toNext)} pts to ${lv.next.name}`:'Top level reached'}</p>
+      <div style="margin-top:8px">${LEVELS.map((l,i)=>`<div class="lvrow ${i>lv.idx?'off':''}">${ic('leaf',16)}${l.name}<span class="muted num">${fmtInt(l.min)}+ pts</span><span class="state">${i<lv.idx?`<span class="chip chip-ok">${ic('check',12,3)} Reached</span>`:i===lv.idx?'<span class="chip chip-ok">Current</span>':''}</span></div>`).join('')}</div></div>
+    <h3 class="sec">Activity</h3>
+    <div class="card"><ul class="rows">${state.history.map(histRow).join('')}</ul></div>
+    <div class="card"><h3>About this prototype</h3><p class="muted" style="margin:6px 0 12px">Sample data only. The Circular Bin is simulated on the right of this page, so no account, server or hardware is needed.</p>
+      <button type="button" class="btn btn-ghost btn-sm" data-act="reset">Reset demo data</button></div>
+  </div>`;
+}
+
+const SCREENS={home:homeScreen,rewards:rewardsScreen,recycle:recycleScreen,precinct:communityScreen,me:meScreen};
+function render(keepScroll){
+  const top=keepScroll?screen.scrollTop:0;
+  screen.innerHTML=SCREENS[ui.tab]();
+  screen.scrollTop=top;
+  // Animate only page changes; preserve focus and scroll on inline updates.
+  if(!keepScroll){
+    const page=screen.firstElementChild;
+    if(page && page.classList.contains('pad'))page.classList.add('ct-page-enter');
+  }
+  document.body.classList.toggle('show-bin',ui.tab==='recycle');
+  if(ui.tab!=='recycle' && document.body.dataset.pane==='bin')setPane('app');
+  updateChrome();
+  if(ui.tab==='recycle'&&ui.recycle==='summary'&&ui.summary){
+    const s=ui.summary;
+    countUp($('#sPts'),s.pts,fmtPts,1100);
+    if(!s.burst){s.burst=true;burst($('#confetti'));}
+  }
+}
+function setTab(t){
+  if(ui.tab==='recycle'&&ui.recycle==='summary'&&t!=='recycle')ui.recycle='idle';
+  ui.tab=t;closeSheet();render(false);
+}
+
+/* ================= app: actions ================= */
+function startScan(){
+  if(ui.recycle!=='idle')return;
+  ui.recycle='scanning';render(true);
+  later(()=>{
+    if(ui.recycle!=='scanning')return;
+    const res=Bin.link(bin.token);
+    if(!res.ok){ui.recycle='idle';render(true);toast(res.reason,'err');return;}
+    appSession={items:[],startedAt:Date.now()};
+    live={stage:'waiting',w:0,entry:null};
+    ui.recycle='session';render(false);
+    toast('Connected to Circular Bin '+BIN.id);
+  },1200);
+}
+function finishSession(){
+  if(!appSession||live.stage!=='waiting')return;
+  const ok=appSession.items.filter(i=>i.ok);
+  const rejected=appSession.items.length-ok.length;
+  if(!ok.length){
+    Bin.end({n:0,g:0,pts:0});
+    appSession=null;ui.recycle='idle';
+    render(false);toast('Session ended. Nothing was recycled.');return;
+  }
+  const byMat={};let pts=0,g=0;
+  ok.forEach(i=>{
+    const m=byMat[i.mat]||(byMat[i.mat]={g:0,n:0,pts:0});
+    m.g+=i.g;m.n++;m.pts=round1(m.pts+i.pts);
+    pts=round1(pts+i.pts);g+=i.g;
+  });
+  const co2=Object.keys(byMat).reduce((a,k)=>a+byMat[k].g/1000*MATERIALS[k].co2,0);
+  const lvBefore=levelInfo(state.lifetime).idx,rankBefore=rankOf(state.user.precinctId);
+  state.balance=round1(state.balance+pts);
+  state.lifetime=round1(state.lifetime+pts);
+  state.monthPts=round1(state.monthPts+pts);
+  Object.keys(byMat).forEach(k=>{
+    state.mats[k].kg=Math.round((state.mats[k].kg+byMat[k].g/1000)*1000)/1000;
+    state.mats[k].count+=byMat[k].n;
+  });
+  const p=state.precincts.find(x=>x.id===state.user.precinctId);
+  p.score=round1(p.score+pts);
+  state.history.unshift({id:uid(),type:'recycle',ts:Date.now(),title:`Circular Bin ${BIN.id} · ${BIN.name}`,sub:`${ok.length} item${ok.length===1?'':'s'} · ${fmtG(g)}`,pts:pts});
+  const lvAfter=levelInfo(state.lifetime),rankAfter=rankOf(state.user.precinctId);
+  ui.summary={pts:pts,g:g,n:ok.length,co2:co2,byMat:byMat,rejected:rejected,balance:state.balance,
+    levelUp:lvAfter.idx>lvBefore?lvAfter.name:null,rankUp:rankAfter!==rankBefore,rankFrom:rankBefore,rankTo:rankAfter};
+  Bin.end({n:ok.length,g:g,pts:pts});
+  appSession=null;ui.recycle='summary';
+  render(false);
+}
+function confirmRedeem(id){
+  const v=vendorById(id);
+  if(!v||state.balance<v.cost){closeSheet();toast('Not enough Circular Points yet.','err');return;}
+  state.balance=round1(state.balance-v.cost);
+  const now=Date.now();
+  const code='CT-'+rndToken(6);
+  const voucher={id:uid(),vendorId:v.id,code:code,status:'active',redeemedAt:now,expiresAt:now+7*DAY};
+  state.vouchers.unshift(voucher);
+  state.history.unshift({id:uid(),type:'redeem',ts:now,title:'Redeemed · '+v.name,sub:v.offer,pts:-v.cost});
+  render(true);
+  toast('Voucher redeemed');
+  voucherSheet(voucher.id);
+}
+function resetDemo(){
+  clearTimers();
+  const boost=bin.boost;
+  state=makeState();
+  ui={tab:'home',recycle:'idle',rview:'market',cat:'All',q:'',summary:null};
+  appSession=null;live={stage:'waiting',w:0,entry:null};
+  Object.assign(bin,{status:'idle',session:null,cur:null,last:null,ended:null,boost:boost});
+  newToken();closeSheet();renderKiosk();render(false);
+  toast('Demo reset');
+}
+const ACT={
+  tab:a=>setTab(a.dataset.tab),
+  scan:()=>startScan(),
+  finish:()=>finishSession(),
+  openbin:()=>setPane('bin'),
+  rview:a=>{ui.rview=a.dataset.v;render(true);},
+  cat:a=>{ui.cat=a.dataset.cat;render(true);},
+  redeem:a=>redeemSheet(a.dataset.id),
+  'confirm-redeem':a=>confirmRedeem(a.dataset.id),
+  'close-sheet':()=>closeSheet(),
+  'show-voucher':a=>voucherSheet(a.dataset.id),
+  'simulate-use':a=>{
+    const v=state.vouchers.find(x=>x.id===a.dataset.id);
+    if(v&&vStatus(v)==='active'){v.status='used';v.usedAt=Date.now();}
+    closeSheet();render(true);toast('Voucher scanned and marked as used');
+  },
+  'goto-mine':()=>{ui.rview='mine';setTab('rewards');},
+  'summary-done':()=>{ui.recycle='idle';setTab('home');},
+  'summary-rewards':()=>{ui.recycle='idle';setTab('rewards');},
+  reset:()=>resetDemo()
+};
+
+/* CircuRide actions — completely browser-local prototype */
+Object.assign(ACT,{
+ 'open-rides':()=>{ui.cview='rides';ui.shuttleView='book';ui.ev=null;ui.evCreate=false;setTab('precinct');},
+ 'ride-view':a=>{ui.rideView=a.dataset.v;render(false);},
+ 'ride-request':a=>{
+   const r=rides().find(x=>x.id===a.dataset.id);if(!r||r.mine)return;
+   if(r.requests.includes('me')){r.requests=r.requests.filter(x=>x!=='me');toast('Seat request cancelled (demo)');}
+   else {if(r.requests.length>=r.seats){toast('Sorry, this ride is full','err');return;}r.requests.push('me');toast('Seat request sent (demo)');}
+   closeSheet();render(true);
+ },
+ 'ride-post':()=>{
+   const f=ui.rideForm||{};
+   if(!f.from||!f.to||f.from===f.to||!/^\d{2}:\d{2}$/.test(f.time||'')){toast('Choose different pickup and destination stops and a departure time','err');return;}
+   const r={id:uid(),driver:meShort(),from:f.from,to:f.to,time:f.time,seats:+f.seats||2,requests:[],mine:true,notes:f.notes||''};
+   rides().unshift(r);ui.rideView='mine';ui.rideForm=null;render(false);toast('Sample ride posted');
+ },
+ 'ride-cancel':a=>{const r=rides().find(x=>x.id===a.dataset.id);if(!r||!r.mine)return;state.rides=rides().filter(x=>x.id!==r.id);closeSheet();render(true);toast('Offered ride removed');}
+});
+
+/* CircuRide streamlined journey, verified-demo rewards and safety */
+Object.assign(ACT,{
+ 'ride-back':()=>{ui.cview='events';ui.rideView='find';render(false);},
+ 'ride-search':()=>{toast('Showing sample journeys to your destination');},
+ 'ride-detail':a=>rideDetails(a.dataset.id),
+ 'ride-sos':()=>openSheet(`<h2>Safety & SOS</h2><div class="banner">${ic('alert',21)}<div><b>In immediate danger in Malaysia, call 999.</b><br>This prototype cannot call emergency services or share your location.</div></div><p class="muted">Before a shared journey: confirm the person's identity, meet at a public location, share trip details with someone you trust, and never feel pressured to board.</p><div class="card"><h3>Planned full-release safeguards</h3><p class="muted">Resident verification · verified vehicle details · trusted contact trip sharing · live journey monitoring · emergency escalation.</p></div><a class="btn btn-primary btn-block" style="text-decoration:none" href="tel:999">Call 999 (device permitting)</a><button type="button" class="btn btn-ghost btn-block" data-act="close-sheet">Close</button>`),
+ 'ride-complete':a=>{
+  const r=rides().find(x=>x.id===a.dataset.id);if(!r||r.completed||!(r.mine?r.requests.length:r.requests.includes('me')))return;
+  r.completed=true;const pts=r.mine?15:5;
+  state.balance=round1(state.balance+pts);state.lifetime=round1(state.lifetime+pts);state.monthPts=round1(state.monthPts+pts);
+  state.history.unshift({id:uid(),type:'event',ts:Date.now(),title:'CircuRide · simulated shared trip',sub:'Demo verification only · no actual ride took place',pts});
+  closeSheet();render(false);toast('DEMO: +'+pts+' Circular Points for simulated trip');
+ }
+});
+/* CircuShuttle: illustrative on-demand township mobility booking. */
+Object.assign(ACT,{
+ 'shuttle-view':a=>{ui.shuttleView=a.dataset.v;ui.shuttleMatch=false;render(false);},
+ 'shuttle-find':()=>{if((ui.shuttleFrom||'Elmina Valley 1 Park Hub')===(ui.shuttleDest||'Elmina Central Park')){toast('Choose a different destination','err');return;}ui.shuttleMatch=true;render(true);},
+ 'shuttle-confirm':()=>{if(!ui.shuttleMatch)return;state.shuttleBooking={from:ui.shuttleFrom||'Elmina Valley 1 Park Hub',to:ui.shuttleDest||'Elmina Central Park',count:+(ui.shuttleCount||1),code:'CS-'+rndToken(5),demoStarted:Date.now()};ui.shuttleView='mine';ui.shuttleMatch=false;render(false);toast('Sample shuttle booking confirmed');},
+ 'shuttle-cancel':()=>{state.shuttleBooking=null;ui.shuttleView='book';render(false);toast('Sample booking cancelled');},
+ 'shuttle-safety':()=>openSheet(`<h2>Safety & SOS</h2><div class="banner">${ic('alert',20)}<div>For emergencies in Malaysia, call 999. This prototype does not alert any operator or share location.</div></div><div class="card"><h3>Planned safeguards</h3><p class="muted">Registered shuttle operators, displayed vehicle details, accessible pickup points, trusted contact trip sharing, and a monitored help channel.</p></div><a href="tel:999" class="btn btn-primary btn-block" style="text-decoration:none">Call 999 (supported devices)</a><button class="btn btn-ghost btn-block" data-act="close-sheet">Close</button>`)
+});
+/* community / events actions (added) */
+Object.assign(ACT,{
+  tab:a=>{
+    if(a.dataset.tab==='precinct'){ui.ev=null;ui.evCreate=false;if(!a.dataset.nav)ui.cview='wars';}
+    setTab(a.dataset.tab);
+  },
+  cview:a=>{ui.cview=a.dataset.v;ui.ev=null;ui.evCreate=false;render(false);},
+  'open-event':a=>{ui.ev=a.dataset.id;render(false);},
+  'ev-back':()=>{ui.ev=null;ui.evCreate=false;ui.evForm=null;render(false);},
+  'ev-create':()=>{ui.evForm={cat:'',name:'',details:'',cap:''};ui.evCreate=true;render(false);},
+  'ev-submit':()=>{
+    if(!evFormValid()){toast('Please fill in every field.','err');return;}
+    const f=ui.evForm,me=meShort();
+    const e={id:uid(),title:f.name.trim(),cat:f.cat,where:'',when:0,host:me,cap:parseInt(f.cap,10),
+      details:f.details.trim(),people:[me],rides:0,mine:true,ride:false,status:'open',reports:[]};
+    evs().unshift(e);
+    ui.evForm=null;ui.evCreate=false;ui.cview='events';ui.ev=e.id;
+    render(false);toast('Event created');
+  },
+  'ev-join':a=>transportSheet(a.dataset.id,a.dataset.change==='1'),
+  'ev-confirm':a=>{
+    const e=evById(a.dataset.id);if(!e)return;
+    const ride=a.dataset.ride==='1';
+    const joining=!e.mine;
+    if(joining){
+      if(e.people.length>=e.cap){closeSheet();toast('Sorry, this event is full.','err');render(true);return;}
+      e.people.push(meShort());e.mine=true;
+    }
+    if(e.ride)e.rides=Math.max(0,e.rides-1);
+    e.ride=ride;if(ride)e.rides++;
+    closeSheet();render(true);
+    toast(joining?(ride?'You joined. Ride requested.':'You joined the event'):'Transport updated');
+  },
+  'ev-leave':a=>{
+    const e=evById(a.dataset.id);if(!e||!e.mine)return;
+    const i=e.people.indexOf(meShort());if(i>-1)e.people.splice(i,1);
+    if(e.ride)e.rides=Math.max(0,e.rides-1);
+    e.mine=false;e.ride=false;
+    render(true);toast('You left the event');
+  }
+});
+
+/* event completion + points (added) */
+Object.assign(ACT,{
+  'ev-finish':a=>{
+    const e=evById(a.dataset.id);if(!e||!e.mine||e.status!=='open')return;
+    if(e.people.length<EV_MIN_JOIN){toast('At least '+EV_MIN_JOIN+' people must join first.','err');return;}
+    e.status='ended';render(true);
+    toast('Event finished. Attendees can now report it.');
+  },
+  'ev-report':a=>{
+    const e=evById(a.dataset.id),me=meShort();
+    if(!e||!e.mine||e.status!=='ended'||e.reports.includes(me))return;
+    e.reports.push(me);evCheck(e);
+    if(e.status!=='success')toast('Thanks, your report was sent');
+    render(true);
+  },
+  'ev-simreport':a=>{
+    const e=evById(a.dataset.id),me=meShort();
+    if(!e||e.status!=='ended')return;
+    const p=e.people.find(x=>x!==me&&!e.reports.includes(x));
+    if(!p)return;
+    e.reports.push(p);evCheck(e);render(true);
+  }
+});
+
+/* app listens to the bin over the bus */
+Net.subscribe(e=>{
+  if(!appSession)return;
+  if(e.type==='weigh'){
+    if(live.stage!=='weighing'){live.stage='weighing';live.w=e.g;renderSessionParts();}
+    else{live.w=e.g;const n=$('#liveW');if(n)n.textContent=e.g;}
+    return;
+  }
+  if(e.type==='identifying'){live.stage='identifying';live.w=e.g;renderSessionParts();return;}
+  if(e.type==='result'){
+    live.stage=e.entry.ok?'accepted':'rejected';live.entry=e.entry;
+    appSession.items.unshift(e.entry);
+    renderSessionParts();updateChrome();
+    if(!onSessionView()){
+      toast(e.entry.ok?`+${fmtPts(e.entry.pts)} pts · ${e.entry.name} (${e.entry.g} g)`:`${e.entry.name} was not accepted`,e.entry.ok?undefined:'err');
+    }
+    return;
+  }
+  if(e.type==='ready'){live.stage='waiting';renderSessionParts();updateChrome();}
+});
+
+/* ================= page chrome ================= */
+function setPane(p){
+  document.body.dataset.pane=p;
+  document.querySelectorAll('.pane-seg button').forEach(b=>b.classList.toggle('on',b.dataset.pane===p));
+  window.scrollTo(0,0);
+}
+function currentTheme(){
+  const t=document.documentElement.dataset.theme;
+  if(t==='dark'||t==='light')return t;
+  return window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';
+}
+function paintThemeBtn(){$('#themeBtn').innerHTML=ic(currentTheme()==='dark'?'sun':'moon',20);}
+
+document.addEventListener('click',e=>{
+  const a=e.target.closest('[data-act]');
+  if(a){const fn=ACT[a.dataset.act];if(fn)fn(a,e);return;}
+  const d=e.target.closest('[data-drop]');
+  if(d){Bin.drop(d.dataset.drop);return;}
+  const b=e.target.closest('[data-boost]');
+  if(b){
+    bin.boost=parseInt(b.dataset.boost,10)||1;
+    document.querySelectorAll('#boostSeg button').forEach(x=>x.classList.toggle('on',x===b));
+    return;
+  }
+  const p=e.target.closest('.pane-seg [data-pane]');
+  if(p){setPane(p.dataset.pane);return;}
+});
+document.addEventListener('input',e=>{
+  if(e.target&&e.target.id==='q'){ui.q=e.target.value;const l=$('#vlist');if(l)l.innerHTML=voucherCards();}
+});
+/* CircuRide offer form and destination filtering */
+const RIDE_FIELDS={rideFrom:'from',rideDest:'to',rideTime:'time',rideSeats:'seats',rideNotes:'notes'};
+function onRideField(e){
+ if(e.target&&e.target.id==='rideTo'){ui.rideTo=e.target.value;render(true);return;}
+ const k=e.target&&RIDE_FIELDS[e.target.id];if(!k)return;
+ if(!ui.rideForm)ui.rideForm={time:'08:00',seats:2};
+ ui.rideForm[k]=e.target.value;
+}
+document.addEventListener('change',e=>{
+ if(e.target?.id==='shuttleFrom'){ui.shuttleFrom=e.target.value;ui.shuttleMatch=false;render(true);}
+ if(e.target?.id==='shuttleDest'){ui.shuttleDest=e.target.value;ui.shuttleMatch=false;render(true);}
+ if(e.target?.id==='shuttleCount'){ui.shuttleCount=+e.target.value;ui.shuttleMatch=false;render(true);}
+});
+document.addEventListener('change',onRideField);
+document.addEventListener('input',e=>{if(e.target?.id==='rideNotes')onRideField(e);});
+
+/* create-event form fields (added) */
+const EV_FIELDS={evCat:'cat',evName:'name',evDetails:'details',evCap:'cap'};
+function onEvField(e){
+  const k=e.target&&EV_FIELDS[e.target.id];
+  if(!k||!ui.evForm)return;
+  ui.evForm[k]=e.target.value;
+  const b=$('#evSubmit');if(b)b.disabled=!evFormValid();
+}
+document.addEventListener('input',onEvField);
+document.addEventListener('change',onEvField);
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet();});
+$('#themeBtn').addEventListener('click',()=>{
+  document.documentElement.dataset.theme=currentTheme()==='dark'?'light':'dark';
+  paintThemeBtn();
+});
+
+/* Demo shuttle ETA illustration; never represents a real vehicle location. */
+function updateShuttleTracker(){
+ const b=state.shuttleBooking;if(!b)return;
+ const marker=$('#shuttleMarker'),eta=$('#shuttleETA'),stage=$('#shuttleStage');if(!marker||!eta)return;
+ const progress=Math.min(1,Math.max(0,(Date.now()-(b.demoStarted||Date.now()))/24000));
+ marker.style.setProperty('--progress',progress.toFixed(3));
+ eta.textContent=progress>=1?'Arrived':Math.max(1,Math.ceil((1-progress)*4))+' min';
+ if(stage)stage.textContent=progress>=1?'Arrived at pickup · simulated':'Shuttle approaching · simulated';
+}
+setInterval(updateShuttleTracker,800);
+/* Cinematic guided product tour: calls the SAME user actions as real controls. */
+let demoRunning=false,demoPaused=false,demoStep=0,demoTimer=null,demoSpeed=1;
+let demoCountdownTimer=null,demoCountdownRemaining=0;
+const DEMO_SCENE_SECONDS=[8,15,19,19,12,10,13,11,11,11,19,9];
+function setDemoCountdown(seconds){
+ clearInterval(demoCountdownTimer);demoCountdownRemaining=seconds*1000;
+ const paint=()=>{const n=document.getElementById('demoRemaining'),f=document.getElementById('demoCountdownFill');if(n)n.textContent=Math.ceil(Math.max(0,demoCountdownRemaining)/1000)+'s';if(f)f.style.width=(100*Math.max(0,demoCountdownRemaining)/(seconds*1000))+'%';};
+ paint();demoCountdownTimer=setInterval(()=>{if(!demoRunning){clearInterval(demoCountdownTimer);return;}if(!demoPaused){demoCountdownRemaining=Math.max(0,demoCountdownRemaining-200);paint();}},200);
+}
+const demoCursor=()=>document.getElementById('demoCursor');
+const demoPanel=()=>document.getElementById('demoGuide');
+const sleepDemo=ms=>new Promise(resolve=>{demoTimer=setTimeout(resolve,ms/demoSpeed);});
+async function demoScrollTo(el){
+ if(!el)return;
+ const sc=el.closest('.screen, .bin-card');
+ if(sc){
+   const er=el.getBoundingClientRect(), sr=sc.getBoundingClientRect();
+   const goal=sc.scrollTop+(er.top+er.height/2)-(sr.top+sr.height/2);
+   sc.scrollTo({top:Math.max(0,goal),behavior:'smooth'});
+ } else {
+   const r=el.getBoundingClientRect();
+   if(r.top<125 || r.bottom>window.innerHeight-30)el.scrollIntoView({behavior:'smooth',block:'center'});
+ }
+ await demoWait(950);
+}
+let demoGuideAnchor=null,demoGuidePreferred='auto';
+function positionGuide(anchorEl,preferred='auto'){
+ const g=demoPanel();
+ if(!g || g.hidden)return;
+ // Deliberately stationary: visual attention moves through the interface, not the caption box.
+ g.classList.add('show');
+}
+window.addEventListener('resize',()=>{if(demoRunning)positionGuide(demoGuideAnchor,demoGuidePreferred);});
+async function demoClick(selector){
+ const el=document.querySelector(selector);if(!el||el.disabled)return false;
+ await demoScrollTo(el);if(!demoRunning)return false;
+ demoGuideAnchor=el; demoGuidePreferred='auto'; positionGuide(el,'auto');
+ const r=el.getBoundingClientRect(),c=demoCursor();
+ c.style.opacity='1';c.style.left=(r.left+r.width*.5)+'px';c.style.top=(r.top+r.height*.5)+'px';
+ await demoWait(1100);if(!demoRunning)return false;
+ c.classList.add('press');el.classList.add('demo-focus');
+ await demoWait(450);if(!demoRunning)return false;
+ el.click();c.classList.remove('press');
+ await demoWait(650);el.classList.remove('demo-focus');return true;
+}
+async function demoClickNoScroll(el){
+ if(!el||!demoRunning)return false;
+ const r=el.getBoundingClientRect(),c=demoCursor();
+ c.style.opacity='1';c.style.left=(r.left+r.width/2)+'px';c.style.top=(r.top+r.height/2)+'px';
+ await demoWait(1050);if(!demoRunning)return false;
+ c.classList.add('press');el.classList.add('demo-focus');
+ await demoWait(350);if(!demoRunning)return false;
+ el.click();c.classList.remove('press');el.classList.remove('demo-focus');
+ await demoWait(450);return true;
+}
+async function demoShow(selector,ms=2700,side='auto'){
+ const el=document.querySelector(selector);if(!el)return;
+ await demoScrollTo(el);
+ demoGuideAnchor=el; demoGuidePreferred=side; positionGuide(el,side);
+ el.classList.add('demo-focus');await demoWait(ms);el.classList.remove('demo-focus');
+}
+function guideText(chapter,title,body,selector,side){
+ const g=demoPanel();g.hidden=false;
+ g.innerHTML=`<div class="demo-top"><span>▶ CIRCUTOWN STORY · ${demoStep+1}/${DEMO_SCENES.length}</span><span>SIMULATED PROTOTYPE</span></div><div class="demo-chapter">${esc(chapter)}</div><h2>${esc(title)}</h2><p>${esc(body)}</p><div class="demo-controls"><button type="button" id="demoPause">${demoPaused?'Resume':'Pause'}</button><button type="button" id="demoSkip">Skip scene →</button><button type="button" id="demoExit">Exit</button></div><div class="demo-progress"><i id="demoCountdownFill" style="width:100%"></i></div>`;
+ document.getElementById('demoPause').onclick=()=>{demoPaused=!demoPaused;document.getElementById('demoPause').textContent=demoPaused?'Resume':'Pause';if(!demoPaused)demoResolvePause?.();};
+ document.getElementById('demoSkip').onclick=()=>{demoStep=Math.min(DEMO_SCENES.length-1,demoStep+1);};
+ document.getElementById('demoExit').onclick=stopGuidedDemo;
+ demoGuideAnchor = selector ? document.querySelector(selector) : null;
+ demoGuidePreferred = side || 'auto';
+ setDemoCountdown(DEMO_SCENE_SECONDS[demoStep]||12);
+ requestAnimationFrame(()=>positionGuide(demoGuideAnchor,demoGuidePreferred));
+}
+let demoResolvePause=null;
+async function demoWait(ms){
+ const ticks=Math.ceil(ms/250);for(let i=0;i<ticks;i++){if(!demoRunning)return;while(demoPaused&&demoRunning){await new Promise(r=>demoResolvePause=r);demoResolvePause=null;}await sleepDemo(250);}
+}
+const DEMO_SCENES=[
+ {chapter:'01 · Meet Aisha',title:'What if waste could pay for coffee?',body:'Aisha lives in Elmina Valley. Her actions will update this same wallet and township leaderboard.',anchor:'.hero',side:'right',run:async()=>{setTab('home');await demoShow('.hero',3600,'right');}},
+ {chapter:'02 · Smart recycling',title:'Connect to the smart drop-off kiosk.',body:'Follow the cursor: open Recycle, then pair Aisha with the simulated Circular Bin.',anchor:'[data-act="scan"]',side:'left',run:async()=>{await demoClick('[data-nav="recycle"]');await demoWait(1000);await demoClick('[data-act="scan"]');await demoWait(2100);}},
+ {chapter:'03 · Verified deposit',title:'Watch a real prototype interaction, not just a screenshot.',body:'We choose 50× DEMO BOOST for a visible leaderboard result. Then deposit glass; weight, material and points are simulated.',anchor:'[data-drop="glass"]',side:'left',run:async()=>{await demoClick('[data-boost="50"]');
+   // The kiosk is an independently scrolling .bin-card, not the page itself.
+   const kioskPane=document.querySelector('.bin-card');
+   kioskPane.scrollTo({top:0,behavior:'smooth'});
+   await demoWait(1350);
+   // Put a compact, real deposit action at the kiosk header so the display stays visible.
+   const demoDrop=document.createElement('button');
+   demoDrop.type='button';
+   demoDrop.className='btn btn-primary btn-sm';
+   demoDrop.textContent='Drop glass bottle';
+   demoDrop.setAttribute('aria-label','Drop glass bottle into Circular Bin simulator');
+   demoDrop.style.cssText='white-space:nowrap;flex-shrink:0';
+   demoDrop.addEventListener('click',()=>Bin.drop('glass'));
+   document.querySelector('.bin-head').appendChild(demoDrop);
+   await demoClickNoScroll(demoDrop);
+   demoDrop.remove();
+   kioskPane.scrollTo({top:0,behavior:'smooth'});
+   await demoWait(5600);await demoShow('#sessLive',2200,'right');}},
+ {chapter:'04 · Points awarded',title:'Aisha claims her Circular Points.',body:'The awarded points update her wallet and precinct ranking. Both changes are shown on screen.',anchor:'.hero-num',side:'right',run:async()=>{await demoClick('[data-act="finish"]');await demoShow('.s-points',2600,'right');await demoClick('[data-act="summary-done"]');await demoShow('.hero-num',3000,'right');await demoShow('.card.stat:last-child',1800,'left');}},
+ {chapter:'05 · Precinct Wars',title:'One resident can change the community leaderboard.',body:'Elmina Valley 1 moves from second to first after the boosted simulated recycling deposit.',anchor:'.board li.me',side:'right',run:async()=>{await demoClick('[data-nav="precinct"]');await demoShow('.rankcard',2700,'left');await demoShow('.board li.me',3500,'right');}},
+ {chapter:'06 · Shop local',title:'Now turn those earned points into something useful.',body:'Visit Rewards and select a cafe voucher in the same township.',anchor:'[data-act="redeem"][data-id="kopi"]',side:'left',run:async()=>{await demoClick('[data-nav="rewards"]');await demoClick('[data-act="redeem"][data-id="kopi"]');await demoWait(1400);}},
+ {chapter:'07 · Redeem a voucher',title:'Confirm the reward and watch the wallet change.',body:'The confirm action deducts Circular Points and produces a voucher QR for the cashier.',anchor:'#vqr',side:'left',run:async()=>{await demoClick('[data-act="confirm-redeem"]');await demoShow('#vqr',3600,'left');closeSheet();await demoClick('[data-nav="home"]');await demoShow('.hero-num',2300,'right');}},
+ {chapter:'08 · Community',title:'It is more than a recycling app.',body:'Community activities connect residents. Open a real event card to see attendance and transport needs.',anchor:'[data-act="open-event"]',side:'left',run:async()=>{await demoClick('[data-nav="precinct"]');await demoClick('[data-act="cview"][data-v="events"]');await demoClick('[data-act="open-event"]');await demoWait(2600);}},
+ {chapter:'09 · CircuShuttle',title:'A simple on-demand township electric shuttle.',body:'The same app can connect residential areas with nearby township destinations. This transport module is a concept simulation.',anchor:'[data-act="open-rides"]',side:'right',run:async()=>{await demoClick('[data-nav="home"]');await demoClick('[data-act="open-rides"]');await demoWait(1800);}},
+ {chapter:'10 · Book a shuttle',title:'Choose the destination and request a shuttle.',body:'The sample search returns an illustrative electric shuttle and a four-minute pickup ETA.',anchor:'[data-act="shuttle-confirm"]',side:'right',run:async()=>{await demoClick('[data-act="shuttle-find"]');await demoShow('[data-act="shuttle-confirm"]',2600,'right');}},
+ {chapter:'11 · Follow the vehicle',title:'Booking confirmation, pickup ETA, and vehicle location.',body:'Watch the animated schematic route and ETA countdown. These are not live GPS measurements.',anchor:'.track-map',side:'right',run:async()=>{await demoClick('[data-act="shuttle-confirm"]');await demoShow('.track-map',3400,'right');await demoShow('.track-eta',6100,'left');}},
+ {chapter:'12 · The bigger picture',title:'One connected, sustainable township.',body:'Verified recycling → local rewards → neighbourhood participation → future shared mobility.',anchor:'.hero',side:'right',run:async()=>{await demoClick('[data-nav="home"]');await demoShow('.hero',3700,'right');}}
+];
+function stopGuidedDemo(){clearInterval(demoCountdownTimer);document.body.classList.remove('demo-active');demoRunning=false;demoPaused=false;clearTimeout(demoTimer);if(demoResolvePause)demoResolvePause();demoPanel().hidden=true;demoPanel().classList.remove('show');demoCursor().style.opacity='0';document.getElementById('demoTrigger').textContent='▶ Guided demo';}
+async function startGuidedDemo(){
+ if(demoRunning){stopGuidedDemo();return;}
+ resetDemo();demoRunning=true;demoPaused=false;demoStep=0;document.body.classList.add('demo-active');
+ document.getElementById('demoTrigger').textContent='■ Stop demo';
+ while(demoRunning&&demoStep<DEMO_SCENES.length){let i=demoStep;let sc=DEMO_SCENES[i];guideText(sc.chapter,sc.title,sc.body,sc.anchor,sc.side);try{await sc.run();}catch(err){console.warn('Guided scene skipped',err);}if(!demoRunning)break;if(demoStep===i)demoStep++;}
+ stopGuidedDemo();
+}
+document.getElementById('demoTrigger').addEventListener('click',startGuidedDemo);
+if(new URLSearchParams(location.search).get('demo')==='1')setTimeout(startGuidedDemo,850);
+/* ================= init ================= */
+$('#brandMark').innerHTML=ic('refresh',20,2.4);
+buildNav();buildTiles();
+newToken();renderKiosk();render(false);paintThemeBtn();
+setInterval(()=>{
+  if(bin.status!=='idle')return;
+  if(Date.now()-bin.tokenAt>=TOKEN_TTL*1000){newToken();renderKiosk();return;}
+  updateCount();
+},1000);
+})();
+</script>
+
+<div id="demoGuide" class="demo-guide" hidden></div><div id="demoCursor" aria-hidden="true"></div>
+</body></html>
